@@ -11,7 +11,7 @@ import scipy.io as S
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, base_path, exp_name):
         self.dataset_size = 250000
-        self.n_timesteps = 16
+        self.n_timesteps = 32
 
         self.base_path = base_path
         self.arrs = []
@@ -69,7 +69,7 @@ def compute_logprob(k, a, b):
 '''Isotropic heteroskedastic loss
 '''
 def iso_het_loss(x, mu, var):
-    return torch.sum(((x - mu) ** 2)/var + 0.5 * torch.log(var))
+    return torch.sum(((x - mu) ** 2)/(var ** 2) + 0.5 * torch.log((var ** 2)))
 
 def train_fn(device):
     params = {'batch_size': 1024,
@@ -82,7 +82,7 @@ def train_fn(device):
     training_generator = torch.utils.data.DataLoader(training_set, **params)
 
     # set up the model
-    model = ARLSTM(embedding_dim=1, hidden_dim=3, output_dim=2)
+    model = ARLSTM(embedding_dim=1, hidden_dim=128, output_dim=2)
     
     loss_fn = iso_het_loss
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
@@ -91,8 +91,6 @@ def train_fn(device):
     model.train()
 
     for epoch in range(max_epochs):
-
-       import ipdb; ipdb.set_trace()
        # training loop
        for cnt, (batch, lab) in enumerate(training_generator):
 
