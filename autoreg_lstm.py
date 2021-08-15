@@ -10,7 +10,7 @@ import scipy.io as S
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, base_path, exp_name):
-        self.dataset_size = 250000
+        self.dataset_size = 300000
         self.n_timesteps = 32
 
         self.base_path = base_path
@@ -20,6 +20,9 @@ class Dataset(torch.utils.data.Dataset):
             arr = arr[dataset.strip('.mat').replace('LFP', 'lfp')][0][0][1]
             self.arrs.append(arr)
         self.arrs = np.vstack(self.arrs).astype(np.float32)
+
+        # z score?
+        self.arrs = (self.arrs - np.mean(self.arrs))/np.std(self.arrs)
         self.n_datapoints, self.n_duration = self.arrs.shape[0], self.arrs.shape[1]
 
         print('Preparing train-test splits...')
@@ -41,7 +44,7 @@ class ARLSTM(torch.nn.Module):
 
       # The LSTM takes action labels as inputs, and outputs hidden states
       # with dimensionality hidden_dim.
-      self.lstm = torch.nn.LSTM(embedding_dim, hidden_dim)
+      self.lstm = torch.nn.LSTM(input_size=embedding_dim, hidden_size=hidden_dim, num_layers=3)
       self.output_fn = torch.nn.Linear(hidden_dim, output_dim)
       self.act = F.log_softmax
 
@@ -69,7 +72,7 @@ def compute_logprob(k, a, b):
 '''Isotropic heteroskedastic loss
 '''
 def iso_het_loss(x, mu, var):
-    return torch.sum(((x - mu) ** 2)/(var ** 2) + 0.5 * torch.log((var ** 2)))
+    return torch.mean(((x - mu) ** 2)/(var ** 2) + 0.5 * torch.log((var ** 2)))
 
 def train_fn(device):
     params = {'batch_size': 1024,
@@ -85,12 +88,16 @@ def train_fn(device):
     model = ARLSTM(embedding_dim=1, hidden_dim=128, output_dim=2)
     
     loss_fn = iso_het_loss
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
+    #optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+    #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
     model.to(device)
     model.train()
 
+    per_epoch_loss = []
     for epoch in range(max_epochs):
+       losses = []
        # training loop
        for cnt, (batch, lab) in enumerate(training_generator):
 
@@ -104,10 +111,15 @@ def train_fn(device):
 
           loss.backward()
           optimizer.step()
-          print('Epoch:{} | Batch: {}/{} | loss: {}'.format(epoch, cnt, training_generator.__len__(), loss.detach().item()))
+
+          losses.append(loss.detach().item())
+
+       #scheduler.step()
+       per_epoch_loss.append(np.mean(losses))
+       print('Epoch:{} | Batch: {}/{} | loss: {}'.format(epoch, cnt, training_generator.__len__(), per_epoch_loss[-1]))
 
     # saving model
-    torch.save(model.state_dict(), 'models/trap2_preexp.pth')
+    torch.save(model.state_dict(), 'models/rodentV0.pth')
 
 
 def gen_sequence(model, seq, len_sample_traj):
