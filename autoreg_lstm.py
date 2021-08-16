@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import scipy.io as S
+import argparse
+import copy
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, base_path, exp_name):
@@ -22,6 +24,9 @@ class Dataset(torch.utils.data.Dataset):
         self.arrs = np.vstack(self.arrs).astype(np.float32)
 
         # z score?
+        self.mean = np.mean(self.arrs)
+        self.std = np.std(self.arrs)
+
         self.arrs = (self.arrs - np.mean(self.arrs))/np.std(self.arrs)
         self.n_datapoints, self.n_duration = self.arrs.shape[0], self.arrs.shape[1]
 
@@ -119,7 +124,7 @@ def train_fn(device):
        print('Epoch:{} | Batch: {}/{} | loss: {}'.format(epoch, cnt, training_generator.__len__(), per_epoch_loss[-1]))
 
     # saving model
-    torch.save(model.state_dict(), 'models/rodentV0.pth')
+    torch.save(model.state_dict(), 'ckpts/rodentV0.pth')
 
 
 def gen_sequence(model, seq, len_sample_traj):
@@ -132,20 +137,12 @@ def gen_sequence(model, seq, len_sample_traj):
             pred = model(seq)
             
             # sample based on this distribution
-            #next_label = torch.argmax(pred)
-            #pred_seq.append(next_label.item())
-
-            # SAMPLE based on softmax probabilities
-            # TODO change to dirichlet
-            probs = pred.exp()
-            p = probs.squeeze().cpu().numpy()
-            p = p/p.sum()
-            next_label = np.random.choice(len(BEH_LABELS), p=p)
-            pred_seq.append(next_label)
+            next_token = torch.normal(pred[:,0], pred[:,1])
+            pred_seq.append(next_token)
             
             # update seq
             seq2[:, :-1] = seq[:, 1:].data
-            seq2[:, -1] = next_label
+            seq2[:, -1] = next_token
             seq = seq2.clone()
 
     return pred_seq
@@ -204,34 +201,34 @@ def simulate_seq(model, val_set, filename, r_idx=0, len_sample_traj=500, n_repea
     plt.close()
 
 
-def eval_fn(device, save_path):
+def generate(device, save_path):
     np.random.seed(0)
-    params = {'batch_size': 16,
+    params = {'batch_size': 32,
               'shuffle': False,
               'num_workers': 1}
- 
-    val_set = Dataset('/media/data_cifs/projects/prj_nih/prj_andrew_holmes/inference/batch_inference/model_predictions/', ['1.Trap2-FC-1-12_preexposure_02-11-2019-2-16-2019_computer2'])
-    val_generator = torch.utils.data.DataLoader(val_set, **params)
 
-    model = ARLSTM(embedding_dim=1, hidden_dim=3, output_dim=9)    
+    # this is a bad way, but doing this just to keep track of the params of the distribution
+    training_set = Dataset('data/', ['PFC_LFP_rat1.mat'])
+ 
+    model = ARLSTM(embedding_dim=1, hidden_dim=128, output_dim=2)
     model.to(device)
     model.load_state_dict(torch.load(save_path))
     model.eval()
 
-    '''
-    #### VAL MODEL
-    for cnt, (batch, lab) in enumerate(val_generator):
+    arr = S.loadmat('data/PFC_LFP_rat2.mat')
+    arr = (arr['PFC_lfp_rat2'][0][0][1][0].astype(np.float32) - training_set.mean)/training_set.std
 
-        batch, lab = batch.to(device), lab.to(device)
-        y = model(batch)
-        print(y, lab)
-        import ipdb; ipdb.set_trace()
+    # pick a random sample
+    start_idx = 0
+    time_window = 32 
 
-    import os; os._exit(0)
-    '''
+    init_seq = torch.tensor(arr[start_idx : start_idx+time_window]).unsqueeze(0).to(device)
+    synthetic_trajectory_length = 2048
+    real_trajectory = arr[start_idx: start_idx+time_window+synthetic_trajectory_length]
+    rtrajectory = copy.deepcopy(real_trajectory)
 
-    for k in range(25):
-        simulate_seq(model, val_set, 'trap_preexp_%03d.png'%k, r_idx=k, len_sample_traj=250, n_repeats=50)
+    import ipdb; ipdb.set_trace()
+    syn_trajectory = gen_sequence(model, init_seq, synthetic_trajectory_length)
 
 if __name__ == '__main__':
     # CUDA for PyTorch
@@ -239,5 +236,15 @@ if __name__ == '__main__':
     device = torch.device("cuda:0" if use_cuda else "cpu")
     torch.backends.cudnn.benchmark = True
 
-    train_fn(device)
-    #eval_fn(device, 'models/trap2_preexp.pth')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--train', action='store_true')
+    parser.add_argument('--generate', action='store_true')
+
+    args = parser.parse_args()
+
+    if args.train:
+        train_fn(device)
+    elif args.generate:
+        generate(device, 'ckpts/rodentV0.pth')
+    else:
+        raise NotImplementedError
