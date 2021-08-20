@@ -21,21 +21,21 @@ fig = plt.figure()
 ax = fig.add_subplot(projection='3d')
 
 ax.plot(t_pts[:10,0], t_pts[:10,1], t_pts[:10,2])
-ax.set_xlim([-200, 200])
-ax.set_ylim([-200, 200])
-ax.set_zlim([-200, 200])
+ax.set_xlim([-300, 300])
+ax.set_ylim([-300, 300])
+ax.set_zlim([-300, 300])
 ax.grid(False)
 
 def update(i):
     ax.clear()
     ax.plot(t_pts[i-10:i+10,0], t_pts[i-10:i+10, 1], t_pts[i-10:i+10, 2])
-    ax.set_xlim([-200, 200])
-    ax.set_ylim([-200, 200])
-    ax.set_zlim([-200, 200])
+    ax.set_xlim([-300, 300])
+    ax.set_ylim([-300, 300])
+    ax.set_zlim([-300, 300])
     ax.grid(False)
     return ax
 
-anim = FuncAnimation(fig, update, frames=np.arange(10, 100), interval=5)
+anim = FuncAnimation(fig, update, frames=np.arange(10, 1000), interval=5)
 anim.save('gifs/random_clip1.gif', dpi=80, writer='imagemagick')
 
 plt.show()

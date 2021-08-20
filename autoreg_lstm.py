@@ -10,6 +10,69 @@ import scipy.io as S
 import argparse
 import copy
 
+import numpy as np
+from scipy.signal import butter, lfilter, freqz
+import matplotlib.pyplot as plt
+
+
+def butter_lowpass(cutoff, fs, order=5):
+    nyq = 0.5 * fs
+    normal_cutoff = cutoff / nyq
+    b, a = butter(order, normal_cutoff, btype='low', analog=False)
+    return b, a
+
+def butter_lowpass_filter(data, cutoff, fs, order=5):
+    b, a = butter_lowpass(cutoff, fs, order=order)
+    a = 1
+    y = lfilter(b, a, data)
+    return y
+
+def func(arr):
+    # Filter requirements.
+    order = 6
+    fs = 600.0       # sample rate, Hz
+    cutoff = 6.  # desired cutoff frequency of the filter, Hz
+
+    # Get the filter coefficients so we can check its frequency response.
+    b, a = butter_lowpass(cutoff, fs, order)
+
+    # Plot the frequency response.
+    w, h = freqz(b, a, worN=8000)
+    plt.subplot(2, 1, 1)
+    plt.plot(0.5*fs*w/np.pi, np.abs(h), 'b')
+    plt.plot(cutoff, 0.5*np.sqrt(2), 'ko')
+    plt.axvline(cutoff, color='k')
+    plt.xlim(0, 0.5*fs)
+    plt.title("Lowpass Filter Frequency Response")
+    plt.xlabel('Frequency [Hz]')
+    plt.grid()
+
+    '''
+    # Demonstrate the use of the filter.
+    # First make some data to be filtered.
+    T = 5.0         # seconds
+    n = int(T * fs) # total number of samples
+    t = np.linspace(0, T, n, endpoint=False)
+    # "Noisy" data.  We want to recover the 1.2 Hz signal from this.
+    data = np.sin(1.2*2*np.pi*t) + 1.5*np.cos(9*2*np.pi*t) + 0.5*np.sin(12.0*2*np.pi*t)
+    '''
+
+    # Filter the data, and plot both the original and filtered signals.
+    y = butter_lowpass_filter(arr, cutoff, fs, order)
+
+    plt.subplot(2, 1, 2)
+    #plt.plot(arr, 'b-', label='data')
+    #plt.plot(y, 'g-', linewidth=2, label='filtered data')
+    #plt.xlabel('Time [sec]')
+    power = np.convolve(y**2, np.ones(600,dtype=int),'valid')
+    plt.hist(power, bins=1000, range=(np.quantile(power, 0.01), np.quantile(power, 0.99)))
+    plt.grid()
+    plt.legend()
+
+    plt.subplots_adjust(hspace=0.35)
+    plt.show()
+
+
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, base_path, exp_name):
         self.dataset_size = 300000
@@ -19,8 +82,13 @@ class Dataset(torch.utils.data.Dataset):
         self.arrs = []
         for dataset in exp_name:
             arr = S.loadmat(os.path.join(base_path, dataset))
-            arr = arr[dataset.strip('.mat').replace('LFP', 'lfp')][0][0][1]
+            #arr = arr[dataset.strip('.mat').replace('LFP', 'lfp')][0][0][1]
+            arr = arr['lfp'][0][0][1]
             self.arrs.append(arr)
+
+            #import ipdb; ipdb.set_trace()
+            func(arr.squeeze())
+
         self.arrs = np.vstack(self.arrs).astype(np.float32)
 
         # z score?
@@ -86,7 +154,9 @@ def train_fn(device):
 
     max_epochs = 100
 
-    training_set = Dataset('data/', ['PFC_LFP_rat1.mat'])
+    #training_set = Dataset('data/', ['PFC_LFP_rat1.mat'])
+    training_set = Dataset('data/', ['RSC_LFP_rat3_600Hz.mat'])
+
     training_generator = torch.utils.data.DataLoader(training_set, **params)
 
     # set up the model
@@ -209,17 +279,18 @@ def generate(device, save_path):
 
     # this is a bad way, but doing this just to keep track of the params of the distribution
     training_set = Dataset('data/', ['PFC_LFP_rat1.mat'])
+    #import ipdb; ipdb.set_trace()
  
     model = ARLSTM(embedding_dim=1, hidden_dim=128, output_dim=2)
     model.to(device)
     model.load_state_dict(torch.load(save_path))
     model.eval()
 
-    arr = S.loadmat('data/PFC_LFP_rat2.mat')
-    arr = (arr['PFC_lfp_rat2'][0][0][1][0].astype(np.float32) - training_set.mean)/training_set.std
+    arr = S.loadmat('data/PFC_LFP_rat1.mat')
+    arr = (arr['PFC_lfp_rat1'][0][0][1][0].astype(np.float32) - training_set.mean)/training_set.std
 
     # pick a random sample
-    start_idx = 0
+    start_idx = 1000
     time_window = 32 
 
     init_seq = torch.tensor(arr[start_idx : start_idx+time_window]).unsqueeze(0).to(device)
@@ -227,8 +298,17 @@ def generate(device, save_path):
     real_trajectory = arr[start_idx: start_idx+time_window+synthetic_trajectory_length]
     rtrajectory = copy.deepcopy(real_trajectory)
 
-    import ipdb; ipdb.set_trace()
-    syn_trajectory = gen_sequence(model, init_seq, synthetic_trajectory_length)
+    fig = plt.figure()
+    ax = fig.add_subplot()
+    ax.plot(rtrajectory, c = 'b', alpha=0.75, label='original')
+
+    for k in range(1):
+        syn_trajectory = gen_sequence(model, init_seq, synthetic_trajectory_length)
+        ax.plot(syn_trajectory, c = 'r', alpha=0.75)
+
+    plt.legend()
+    plt.show()
+
 
 if __name__ == '__main__':
     # CUDA for PyTorch
