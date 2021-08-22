@@ -13,7 +13,7 @@ import copy
 import numpy as np
 from scipy.signal import butter, lfilter, freqz
 import matplotlib.pyplot as plt
-
+from config import Config
 
 def butter_lowpass(cutoff, fs, order=5):
     nyq = 0.5 * fs
@@ -27,79 +27,105 @@ def butter_lowpass_filter(data, cutoff, fs, order=5):
     y = lfilter(b, a, data)
     return y
 
-def func(arr):
-    # Filter requirements.
+def extract_sleep_bouts(arr, make_plot=False):
     order = 6
-    fs = 600.0       # sample rate, Hz
+    fs = 600.0   # sample rate, Hz
     cutoff = 6.  # desired cutoff frequency of the filter, Hz
-
-    # Get the filter coefficients so we can check its frequency response.
-    b, a = butter_lowpass(cutoff, fs, order)
-
-    # Plot the frequency response.
-    w, h = freqz(b, a, worN=8000)
-    plt.subplot(2, 1, 1)
-    plt.plot(0.5*fs*w/np.pi, np.abs(h), 'b')
-    plt.plot(cutoff, 0.5*np.sqrt(2), 'ko')
-    plt.axvline(cutoff, color='k')
-    plt.xlim(0, 0.5*fs)
-    plt.title("Lowpass Filter Frequency Response")
-    plt.xlabel('Frequency [Hz]')
-    plt.grid()
-
-    '''
-    # Demonstrate the use of the filter.
-    # First make some data to be filtered.
-    T = 5.0         # seconds
-    n = int(T * fs) # total number of samples
-    t = np.linspace(0, T, n, endpoint=False)
-    # "Noisy" data.  We want to recover the 1.2 Hz signal from this.
-    data = np.sin(1.2*2*np.pi*t) + 1.5*np.cos(9*2*np.pi*t) + 0.5*np.sin(12.0*2*np.pi*t)
-    '''
 
     # Filter the data, and plot both the original and filtered signals.
     y = butter_lowpass_filter(arr, cutoff, fs, order)
+    power = np.convolve(y**2, np.ones(5*600,dtype=int),'valid')
 
-    plt.subplot(2, 1, 2)
-    #plt.plot(arr, 'b-', label='data')
-    #plt.plot(y, 'g-', linewidth=2, label='filtered data')
-    #plt.xlabel('Time [sec]')
-    power = np.convolve(y**2, np.ones(600,dtype=int),'valid')
-    plt.hist(power, bins=1000, range=(np.quantile(power, 0.01), np.quantile(power, 0.99)))
-    plt.grid()
-    plt.legend()
+    if make_plot:
+        # Get the filter coefficients so we can check its frequency response.
+        b, a = butter_lowpass(cutoff, fs, order)
 
-    plt.subplots_adjust(hspace=0.35)
-    plt.show()
+        # Plot the frequency response.
+        w, h = freqz(b, a, worN=8000)
+        plt.subplot(2, 1, 1)
+        plt.plot(0.5*fs*w/np.pi, np.abs(h), 'b')
+        plt.plot(cutoff, 0.5*np.sqrt(2), 'ko')
+        plt.axvline(cutoff, color='k')
+        plt.xlim(0, 0.5*fs)
+        plt.title("Lowpass Filter Frequency Response")
+        plt.xlabel('Frequency [Hz]')
+        plt.grid()
 
+        plt.subplot(2, 1, 2)
+        plt.hist(power, bins=1000, range=(np.quantile(power, 0.01), np.quantile(power, 0.99)))
+        plt.grid()
+        plt.legend()
+        plt.subplots_adjust(hspace=0.35)
+        plt.show()
+
+    thr = 3. * 1e-13
+    idx = np.where(power >= thr)[0]
+
+    changepts = np.where(idx[1:] - idx[:-1] > 1)[0]
+    bouts = []
+    bouts.append((idx[0], idx[changepts[0]]))
+    for k in range(changepts.shape[0]-1):
+        bouts.append((idx[changepts[k]+1], idx[changepts[k+1]]))
+
+    join_bouts = []
+    cur_bout = bouts[0]
+
+    # consider joining bouts
+    for k in range(1, len(bouts)):
+        # merge
+        if bouts[k][0] - cur_bout[1] <= 2*fs:
+            cur_bout = (cur_bout[0], bouts[k][1])
+        else:
+            join_bouts.append(cur_bout)
+            cur_bout = bouts[k]
+
+    # prune bouts
+    bouts = []
+    for k in range(len(join_bouts)):
+        if join_bouts[k][1] - join_bouts[k][0] > 1*fs:
+            bouts.append(join_bouts[k])
+
+    if make_plot:           
+        plt.plot(y)
+        for k in range(len(bouts)):
+            plt.plot(np.arange(bouts[k][0], bouts[k][1]), y[bouts[k][0]:bouts[k][1]], c='r')
+        plt.show()
+
+    return y, bouts
 
 class Dataset(torch.utils.data.Dataset):
-    def __init__(self, base_path, exp_name):
-        self.dataset_size = 300000
-        self.n_timesteps = 32
+    def __init__(self, cfg, base_path, exp_name):
+        self.cfg = cfg
+        self.dataset_size = cfg.dataset_size
+        self.n_timesteps = cfg.n_timesteps
 
         self.base_path = base_path
         self.arrs = []
+
         for dataset in exp_name:
             arr = S.loadmat(os.path.join(base_path, dataset))
-            #arr = arr[dataset.strip('.mat').replace('LFP', 'lfp')][0][0][1]
-            arr = arr['lfp'][0][0][1]
-            self.arrs.append(arr)
+            if cfg.exp == 'PFC':
+                arr = arr[dataset.strip('.mat').replace('LFP', 'lfp')][0][0][1]
+            elif cfg.exp == 'RSC':
+                arr = arr['lfp'][0][0][1]
 
-            #import ipdb; ipdb.set_trace()
-            func(arr.squeeze())
+            filter_arr, bouts = extract_sleep_bouts(arr.squeeze())
+            for bout in bouts:
+                self.arrs.append(filter_arr[bout[0] : bout[1]])
 
-        self.arrs = np.vstack(self.arrs).astype(np.float32)
+        if cfg.train_zscore:
+            self.arrs = np.vstack(self.arrs).astype(np.float32)
 
-        # z score?
-        self.mean = np.mean(self.arrs)
-        self.std = np.std(self.arrs)
+            self.mean = np.mean(self.arrs)
+            self.std = np.std(self.arrs)
 
-        self.arrs = (self.arrs - np.mean(self.arrs))/np.std(self.arrs)
-        self.n_datapoints, self.n_duration = self.arrs.shape[0], self.arrs.shape[1]
+            self.arrs = (self.arrs - np.mean(self.arrs))/np.std(self.arrs)
+
+        self.n_datapoints = len(self.arrs)
 
         print('Preparing train-test splits...')
-        self.rnd_idx, self.rnd_start = np.random.randint(self.n_datapoints, size=(self.dataset_size,)), np.random.randint(self.n_duration-self.n_timesteps-1, size=(self.dataset_size,))
+        self.rnd_idx = np.random.randint(self.n_datapoints, size=(self.dataset_size,)) 
+        #, np.random.randint(self.n_duration-self.n_timesteps-1, size=(self.dataset_size,))
  
     def __len__(self):
         'Denotes the total number of samples'
@@ -107,7 +133,12 @@ class Dataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         'Generates one sample of data'
-        return self.arrs[self.rnd_idx[index], self.rnd_start[index]:self.rnd_start[index]+self.n_timesteps], self.arrs[self.rnd_idx[index], self.rnd_start[index]+self.n_timesteps]
+        idx = self.rnd_idx[index]
+        # sample start index 
+        arr_len = self.arrs[idx].shape[0]
+        start_idx = np.random.randint(0, arr_len - self.cfg.n_timesteps)    
+
+        return self.arrs[idx][start_idx:start_idx + self.cfg.n_timesteps], self.arrs[idx][start_idx+self.cfg.n_timesteps]
 
 class ARLSTM(torch.nn.Module):
 
@@ -148,16 +179,12 @@ def iso_het_loss(x, mu, var):
     return torch.mean(((x - mu) ** 2)/(var ** 2) + 0.5 * torch.log((var ** 2)))
 
 def train_fn(device):
-    params = {'batch_size': 1024,
-              'shuffle': False,
-              'num_workers': 1}
-
-    max_epochs = 100
+    cfg = Config()
 
     #training_set = Dataset('data/', ['PFC_LFP_rat1.mat'])
-    training_set = Dataset('data/', ['RSC_LFP_rat3_600Hz.mat'])
+    training_set = Dataset(cfg, cfg.data_path, cfg.experiments)
 
-    training_generator = torch.utils.data.DataLoader(training_set, **params)
+    training_generator = torch.utils.data.DataLoader(training_set, **cfg.params)
 
     # set up the model
     model = ARLSTM(embedding_dim=1, hidden_dim=128, output_dim=2)
