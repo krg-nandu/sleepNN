@@ -5,6 +5,8 @@ class Config():
         self.data_path = 'data/'
         self.experiments = ['RSC_LFP_rat3_600Hz.mat']
 
+        self.save_path = 'ckpts/'
+
         # training related hyperparameters
         self.dataset_size = 300000
         self.n_timesteps = 32
@@ -15,6 +17,8 @@ class Config():
                 }
         self.max_epochs = 100
         self.train_zscore = False
+        self.model_name = 'rodentRSC'
+        self.model_type = 'asleep' # choice is between asleep vs awake
 
         # params for the neural data preprocessing
         self.order = 6

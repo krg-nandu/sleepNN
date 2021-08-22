@@ -27,7 +27,7 @@ def butter_lowpass_filter(data, cutoff, fs, order=5):
     y = lfilter(b, a, data)
     return y
 
-def extract_sleep_bouts(arr, make_plot=False):
+def extract_sleep_bouts(arr, model_type, make_plot=False):
     order = 6
     fs = 600.0   # sample rate, Hz
     cutoff = 6.  # desired cutoff frequency of the filter, Hz
@@ -59,7 +59,12 @@ def extract_sleep_bouts(arr, make_plot=False):
         plt.show()
 
     thr = 3. * 1e-13
-    idx = np.where(power >= thr)[0]
+    if model_type == 'asleep':
+        idx = np.where(power >= thr)[0]
+    elif model_type == 'awake':
+        idx = np.where(power <= thr)[0]
+    else:
+        raise NotImplementedError
 
     changepts = np.where(idx[1:] - idx[:-1] > 1)[0]
     bouts = []
@@ -109,7 +114,8 @@ class Dataset(torch.utils.data.Dataset):
             elif cfg.exp == 'RSC':
                 arr = arr['lfp'][0][0][1]
 
-            filter_arr, bouts = extract_sleep_bouts(arr.squeeze())
+            filter_arr, bouts = extract_sleep_bouts(arr.squeeze(), cfg.model_type)
+            filter_arr = filter_arr.astype(np.float32)
             for bout in bouts:
                 self.arrs.append(filter_arr[bout[0] : bout[1]])
 
@@ -136,7 +142,7 @@ class Dataset(torch.utils.data.Dataset):
         idx = self.rnd_idx[index]
         # sample start index 
         arr_len = self.arrs[idx].shape[0]
-        start_idx = np.random.randint(0, arr_len - self.cfg.n_timesteps)    
+        start_idx = np.random.randint(arr_len - self.cfg.n_timesteps - 1)    
 
         return self.arrs[idx][start_idx:start_idx + self.cfg.n_timesteps], self.arrs[idx][start_idx+self.cfg.n_timesteps]
 
@@ -181,10 +187,8 @@ def iso_het_loss(x, mu, var):
 def train_fn(device):
     cfg = Config()
 
-    #training_set = Dataset('data/', ['PFC_LFP_rat1.mat'])
     training_set = Dataset(cfg, cfg.data_path, cfg.experiments)
-
-    training_generator = torch.utils.data.DataLoader(training_set, **cfg.params)
+    training_generator = torch.utils.data.DataLoader(training_set, **cfg.train_params)
 
     # set up the model
     model = ARLSTM(embedding_dim=1, hidden_dim=128, output_dim=2)
@@ -198,7 +202,7 @@ def train_fn(device):
     model.train()
 
     per_epoch_loss = []
-    for epoch in range(max_epochs):
+    for epoch in range(cfg.max_epochs):
        losses = []
        # training loop
        for cnt, (batch, lab) in enumerate(training_generator):
@@ -213,7 +217,6 @@ def train_fn(device):
 
           loss.backward()
           optimizer.step()
-
           losses.append(loss.detach().item())
 
        #scheduler.step()
@@ -221,7 +224,7 @@ def train_fn(device):
        print('Epoch:{} | Batch: {}/{} | loss: {}'.format(epoch, cnt, training_generator.__len__(), per_epoch_loss[-1]))
 
     # saving model
-    torch.save(model.state_dict(), 'ckpts/rodentV0.pth')
+    torch.save(model.state_dict(), os.path.join(cfg.save_path, '{}_{}'.format(cfg.model_name, cfg.model_type))
 
 
 def gen_sequence(model, seq, len_sample_traj):
@@ -306,7 +309,6 @@ def generate(device, save_path):
 
     # this is a bad way, but doing this just to keep track of the params of the distribution
     training_set = Dataset('data/', ['PFC_LFP_rat1.mat'])
-    #import ipdb; ipdb.set_trace()
  
     model = ARLSTM(embedding_dim=1, hidden_dim=128, output_dim=2)
     model.to(device)
