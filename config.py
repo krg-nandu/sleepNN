@@ -3,15 +3,15 @@ class Config():
         # experiment type
         self.exp = 'RSC' # [choice between RSC and PFC]
         self.data_path = 'data/'
-        self.experiments = ['RSC_LFP_rat3_600Hz.mat']
+        self.experiments = ['RSC_LFP_rat3_600Hz.mat', 'RSC_LFP_rat4_600Hz.mat','RSC_LFP_rat5_600Hz.mat']
 
         self.save_path = 'ckpts/'
 
         # training related hyperparameters
-        self.dataset_size = 300000
-        self.n_timesteps = 32
+        self.dataset_size = 1000000
+        self.n_timesteps = 256
         self.train_params = {
-                'batch_size': 1024,
+                'batch_size': 4096,
                 'shuffle': False,
                 'num_workers': 1
                 }

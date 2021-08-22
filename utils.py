@@ -29,7 +29,7 @@ def butter_lowpass_filter(data, cutoff, fs, order=5):
     y = lfilter(b, a, data)
     return y
 
-def extract_sleep_bouts(arr, cfg, make_plot=True):
+def extract_sleep_bouts(arr, cfg, make_plot=False):
     # Filter the data, and plot both the original and filtered signals.
     y = butter_lowpass_filter(arr, cfg.cutoff, cfg.fs, cfg.order)
     power = np.convolve(y**2, np.ones(int(cfg.window), dtype=int),'valid')
@@ -42,17 +42,20 @@ def extract_sleep_bouts(arr, cfg, make_plot=True):
         # Plot the frequency response.
         w, h = freqz(b, a, worN=8000)
         plt.subplot(2, 1, 1)
-        plt.plot(0.5*fs*w/np.pi, np.abs(h), 'b')
-        plt.plot(cfg.cutoff, 0.5*np.sqrt(2), 'ko')
+        plt.plot(0.5 * cfg.fs * w/np.pi, np.abs(h), 'b')
+        plt.plot(cfg.cutoff, 0.5 * np.sqrt(2), 'ko')
         plt.axvline(cfg.cutoff, color='k')
-        plt.xlim(0, 0.5*fs)
+        plt.xlim(0, 0.5 * cfg.fs)
         plt.title("Lowpass Filter Frequency Response")
         plt.xlabel('Frequency [Hz]')
         plt.grid()
 
         plt.subplot(2, 1, 2)
-        plt.hist(power[power <= thr], bins=500, range=(np.quantile(power, 0.01), np.quantile(power, 0.99)), c='b', label='wake')
-        plt.hist(power[power > thr], bins=500, range=(np.quantile(power, 0.01), np.quantile(power, 0.99)), c='r', label='sleep')
+        plt.hist(power[power <= thr], bins=500, range=(np.quantile(power, 0.01), np.quantile(power, 0.99)), color='b', label='wake')
+        plt.hist(power[power > thr], bins=500, range=(np.quantile(power, 0.01), np.quantile(power, 0.99)), color='r', label='sleep')
+
+        plt.xlabel('Average Power')
+        plt.ylabel('Frequency')
 
         plt.grid()
         plt.legend()
@@ -94,6 +97,10 @@ def extract_sleep_bouts(arr, cfg, make_plot=True):
         plt.plot(y)
         for k in range(len(bouts)):
             plt.plot(np.arange(bouts[k][0], bouts[k][1]), y[bouts[k][0]:bouts[k][1]], c='r')
+        plt.grid()
+        plt.xlabel('Time (in ms)')  
+        plt.ylabel('LFP (in mV)')
+
         plt.show()
 
     return y, bouts
