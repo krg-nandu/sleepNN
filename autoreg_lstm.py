@@ -15,88 +15,7 @@ from scipy.signal import butter, lfilter, freqz
 import matplotlib.pyplot as plt
 from config import Config
 
-def butter_lowpass(cutoff, fs, order=5):
-    nyq = 0.5 * fs
-    normal_cutoff = cutoff / nyq
-    b, a = butter(order, normal_cutoff, btype='low', analog=False)
-    return b, a
-
-def butter_lowpass_filter(data, cutoff, fs, order=5):
-    b, a = butter_lowpass(cutoff, fs, order=order)
-    a = 1
-    y = lfilter(b, a, data)
-    return y
-
-def extract_sleep_bouts(arr, model_type, make_plot=False):
-    order = 6
-    fs = 600.0   # sample rate, Hz
-    cutoff = 6.  # desired cutoff frequency of the filter, Hz
-
-    # Filter the data, and plot both the original and filtered signals.
-    y = butter_lowpass_filter(arr, cutoff, fs, order)
-    power = np.convolve(y**2, np.ones(5*600,dtype=int),'valid')
-
-    if make_plot:
-        # Get the filter coefficients so we can check its frequency response.
-        b, a = butter_lowpass(cutoff, fs, order)
-
-        # Plot the frequency response.
-        w, h = freqz(b, a, worN=8000)
-        plt.subplot(2, 1, 1)
-        plt.plot(0.5*fs*w/np.pi, np.abs(h), 'b')
-        plt.plot(cutoff, 0.5*np.sqrt(2), 'ko')
-        plt.axvline(cutoff, color='k')
-        plt.xlim(0, 0.5*fs)
-        plt.title("Lowpass Filter Frequency Response")
-        plt.xlabel('Frequency [Hz]')
-        plt.grid()
-
-        plt.subplot(2, 1, 2)
-        plt.hist(power, bins=1000, range=(np.quantile(power, 0.01), np.quantile(power, 0.99)))
-        plt.grid()
-        plt.legend()
-        plt.subplots_adjust(hspace=0.35)
-        plt.show()
-
-    thr = 3. * 1e-13
-    if model_type == 'asleep':
-        idx = np.where(power >= thr)[0]
-    elif model_type == 'awake':
-        idx = np.where(power <= thr)[0]
-    else:
-        raise NotImplementedError
-
-    changepts = np.where(idx[1:] - idx[:-1] > 1)[0]
-    bouts = []
-    bouts.append((idx[0], idx[changepts[0]]))
-    for k in range(changepts.shape[0]-1):
-        bouts.append((idx[changepts[k]+1], idx[changepts[k+1]]))
-
-    join_bouts = []
-    cur_bout = bouts[0]
-
-    # consider joining bouts
-    for k in range(1, len(bouts)):
-        # merge
-        if bouts[k][0] - cur_bout[1] <= 2*fs:
-            cur_bout = (cur_bout[0], bouts[k][1])
-        else:
-            join_bouts.append(cur_bout)
-            cur_bout = bouts[k]
-
-    # prune bouts
-    bouts = []
-    for k in range(len(join_bouts)):
-        if join_bouts[k][1] - join_bouts[k][0] > 1*fs:
-            bouts.append(join_bouts[k])
-
-    if make_plot:           
-        plt.plot(y)
-        for k in range(len(bouts)):
-            plt.plot(np.arange(bouts[k][0], bouts[k][1]), y[bouts[k][0]:bouts[k][1]], c='r')
-        plt.show()
-
-    return y, bouts
+from utils import extract_sleep_bouts
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, cfg, base_path, exp_name):
@@ -114,7 +33,7 @@ class Dataset(torch.utils.data.Dataset):
             elif cfg.exp == 'RSC':
                 arr = arr['lfp'][0][0][1]
 
-            filter_arr, bouts = extract_sleep_bouts(arr.squeeze(), cfg.model_type)
+            filter_arr, bouts = extract_sleep_bouts(arr.squeeze(), cfg)
             filter_arr = filter_arr.astype(np.float32)
             for bout in bouts:
                 self.arrs.append(filter_arr[bout[0] : bout[1]])
@@ -224,7 +143,7 @@ def train_fn(device):
        print('Epoch:{} | Batch: {}/{} | loss: {}'.format(epoch, cnt, training_generator.__len__(), per_epoch_loss[-1]))
 
     # saving model
-    torch.save(model.state_dict(), os.path.join(cfg.save_path, '{}_{}'.format(cfg.model_name, cfg.model_type))
+    torch.save(model.state_dict(), os.path.join(cfg.save_path, '{}_{}'.format(cfg.model_name, cfg.model_type)))
 
 
 def gen_sequence(model, seq, len_sample_traj):
