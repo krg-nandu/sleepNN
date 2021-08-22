@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.signal import butter, lfilter, freqz
 from sklearn.mixture import GaussianMixture
 
-def identify_threshold(power)
+def identify_threshold(power):
     lq = np.quantile(power, 0.01)
     uq = np.quantile(power, 0.99)
     vals = power[np.logical_and(power > lq, power < uq)]
@@ -29,10 +29,11 @@ def butter_lowpass_filter(data, cutoff, fs, order=5):
     y = lfilter(b, a, data)
     return y
 
-def extract_sleep_bouts(arr, cfg, make_plot=False):
+def extract_sleep_bouts(arr, cfg, make_plot=True):
     # Filter the data, and plot both the original and filtered signals.
     y = butter_lowpass_filter(arr, cfg.cutoff, cfg.fs, cfg.order)
-    power = np.convolve(y**2, np.ones(cfg.window, dtype=int),'valid')
+    power = np.convolve(y**2, np.ones(int(cfg.window), dtype=int),'valid')
+    thr = identify_threshold(power)
 
     if make_plot:
         # Get the filter coefficients so we can check its frequency response.
@@ -50,13 +51,13 @@ def extract_sleep_bouts(arr, cfg, make_plot=False):
         plt.grid()
 
         plt.subplot(2, 1, 2)
-        plt.hist(power, bins=1000, range=(np.quantile(power, 0.01), np.quantile(power, 0.99)))
+        plt.hist(power[power <= thr], bins=500, range=(np.quantile(power, 0.01), np.quantile(power, 0.99)), c='b', label='wake')
+        plt.hist(power[power > thr], bins=500, range=(np.quantile(power, 0.01), np.quantile(power, 0.99)), c='r', label='sleep')
+
         plt.grid()
         plt.legend()
         plt.subplots_adjust(hspace=0.35)
         plt.show()
-
-    thr = identify_threshold(power)
 
     if cfg.model_type == 'asleep':
         idx = np.where(power >= thr)[0]
