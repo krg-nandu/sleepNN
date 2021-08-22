@@ -9,9 +9,9 @@ class Config():
 
         # training related hyperparameters
         self.dataset_size = 1000000
-        self.n_timesteps = 256
+        self.n_timesteps = 128
         self.train_params = {
-                'batch_size': 4096,
+                'batch_size': 1024,
                 'shuffle': False,
                 'num_workers': 1
                 }
