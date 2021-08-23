@@ -8,20 +8,75 @@ import numpy as np
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import scipy.io as S
 import argparse
-import copy
+import copy, pickle
 
 import numpy as np
 import matplotlib.pyplot as plt
 from config import Config
 
-from utils import extract_sleep_bouts, butter_lowpass_filter
+from utils import extract_sleep_bouts, butter_lowpass_filter, make_pcs
+from matplotlib.animation import FuncAnimation 
+
+class DatasetPCA(torch.utils.data.Dataset):
+    def __init__(self, cfg, base_path, exp_name):
+        self.cfg = cfg
+        self.dataset_size = cfg.dataset_size
+        self.n_timesteps = cfg.n_timesteps
+        self.base_path = base_path
+        self.arrs = []
+
+        if not os.path.exists('{}_components.p'.format(cfg.exp)):
+            self.pca, self.arrs = make_pcs(cfg)
+        else:
+            self.pca = pickle.load(open('{}_components.p'.format(cfg.exp), 'rb'))
+            self.arrs = pickle.load(open('{}_transformed.p'.format(cfg.exp), 'rb'))
+
+        '''
+        half_window = int(cfg.pca_window/2)
+
+        for dataset in exp_name:
+            arr = S.loadmat(os.path.join(base_path, dataset))
+            if cfg.exp == 'PFC':
+                arr = arr[dataset.strip('.mat').replace('LFP', 'lfp')][0][0][1]
+            elif cfg.exp == 'RSC':
+                arr = arr['lfp'][0][0][1]
+
+            # low pass filter
+            filter_arr = butter_lowpass_filter(arr.squeeze(), cfg.cutoff, cfg.fs, cfg.order)
+            filter_arr = filter_arr.astype(np.float32)
+            n_dp = filter_arr.shape[0]    
+            pts = np.vstack([filter_arr[j - half_window: j + half_window] for j in range(half_window, n_dp - half_window, 2)])
+
+            # extract PCs
+            myp = pca.fit_transform(pts)
+            self.arrs.append(myp)
+        '''
+
+        self.n_datapoints = len(self.arrs)
+
+        print('Preparing train-test splits...')
+        self.rnd_idx = np.random.randint(self.n_datapoints, size=(self.dataset_size,)) 
+        #, np.random.randint(self.n_duration-self.n_timesteps-1, size=(self.dataset_size,))
+ 
+    def __len__(self):
+        'Denotes the total number of samples'
+        return self.rnd_idx.shape[0]
+
+    def __getitem__(self, index):
+        'Generates one sample of data'
+        idx = self.rnd_idx[index]
+        # sample start index 
+        arr_len = self.arrs[idx].shape[0]
+        start_idx = np.random.randint(arr_len - self.cfg.n_timesteps - 1)    
+
+        return self.arrs[idx][start_idx:start_idx + self.cfg.n_timesteps, :], self.arrs[idx][start_idx+self.cfg.n_timesteps, :]
+
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, cfg, base_path, exp_name):
         self.cfg = cfg
         self.dataset_size = cfg.dataset_size
         self.n_timesteps = cfg.n_timesteps
-
         self.base_path = base_path
         self.arrs = []
 
@@ -78,8 +133,15 @@ class ARLSTM(torch.nn.Module):
       self.act = F.softplus
 
    def forward(self, x):
-      lstm_out, _ = self.lstm(x.transpose(-1,0).unsqueeze(-1))
+
+      if len(x.shape) == 3:
+        inp = x.transpose(1, 0)
+      else:
+        inp = x.transpose(-1,0).unsqueeze(-1)
+
+      lstm_out, _ = self.lstm(inp)
       pred = self.output_fn(lstm_out[-1])
+
       # is there a good activation function for this? not sure..
       pred = torch.cat([pred[:, :int(self.output_dim/2)], self.act(pred[:, int(self.output_dim/2):])], axis=-1)
 
@@ -107,19 +169,24 @@ def iso_het_loss(x, mu, var):
 '''Cheat to try replicate a confidence interval
 '''
 def lsqr(x, mu, var):
-    return torch.sum( (x - (mu+var))**2 + (x - (mu-var))**2)
+    #return torch.sum( (x - (mu+var))**2 + (x - (mu-var))**2)
+    return torch.sum( (x - mu)**2)
 
 def train_fn(device):
     cfg = Config()
 
-    training_set = Dataset(cfg, cfg.data_path, cfg.experiments)
+    if cfg.style == 'raw':
+        training_set = Dataset(cfg, cfg.data_path, cfg.experiments)
+    elif cfg.style == 'pca':
+        training_set = DatasetPCA(cfg, cfg.data_path, cfg.experiments)
+
     training_generator = torch.utils.data.DataLoader(training_set, **cfg.train_params)
 
     # set up the model
-    model = ARLSTM(embedding_dim=1, hidden_dim=128, output_dim=2)
+    model = ARLSTM(embedding_dim=cfg.embedding_dim, hidden_dim=cfg.hidden_dim, output_dim=2*cfg.output_dim)
     
-    #loss_fn = iso_het_loss
-    loss_fn = lsqr
+    loss_fn = iso_het_loss
+    #loss_fn = lsqr
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
@@ -141,7 +208,7 @@ def train_fn(device):
           y = model(batch)
 
           # y has the "parameters" of the distribution that we want to model
-          mu, var = y[:, 0], y[:, 1]
+          mu, var = y[:, :cfg.output_dim], y[:, cfg.output_dim:]
           loss = loss_fn(lab, mu, var)
 
           loss.backward()
@@ -153,7 +220,7 @@ def train_fn(device):
        print('Epoch:{} | Batch: {}/{} | loss: {}'.format(epoch, cnt, training_generator.__len__(), per_epoch_loss[-1]))
 
     # saving model
-    torch.save(model.state_dict(), os.path.join(cfg.save_path, '{}_{}.pth'.format(cfg.model_name, cfg.model_type)))
+    torch.save(model.state_dict(), os.path.join(cfg.save_path, '{}_{}_T{}_S{}.pth'.format(cfg.model_name, cfg.model_type, cfg.n_timesteps, cfg.style)))
 
 
 def gen_sequence(model, seq, len_sample_traj):
@@ -168,6 +235,8 @@ def gen_sequence(model, seq, len_sample_traj):
             
             # sample based on this distribution
             next_token = torch.normal(pred[:,0], pred[:,1])
+            #next_token = pred[:,0]
+
             sd.append(pred[:, 1])
             mu.append(pred[:, 0])
             pred_seq.append(next_token)
@@ -179,44 +248,107 @@ def gen_sequence(model, seq, len_sample_traj):
 
     return pred_seq
 
+def gen_sequence_pca(model, seq, len_sample_traj, nparam):
+
+    seq2 = seq.clone()
+    pred_seq = list(seq.cpu().numpy())
+
+    with torch.no_grad():
+        for k in tqdm.tqdm(range(len_sample_traj)):
+            pred = model(seq)
+            
+            # sample based on this distribution
+            next_token = torch.normal(pred[0, :nparam], pred[0, nparam:])
+            pred_seq.append(next_token.detach().cpu().numpy())
+            
+            # update seq
+            seq2[:, :-1] = seq[:, 1:].data
+            seq2[:, -1] = next_token
+            seq = seq2.clone()
+
+    return np.vstack(pred_seq)
 
 def generate(device):
     np.random.seed(0)
     cfg = Config()
 
-    model = ARLSTM(embedding_dim=1, hidden_dim=128, output_dim=2)
+    if cfg.style == 'raw':
+        validation_set = Dataset(cfg, cfg.data_path, [cfg.test_experiment])
+    elif cfg.style == 'pca':
+        validation_set = DatasetPCA(cfg, cfg.data_path, cfg.experiments)
+
+    model = ARLSTM(embedding_dim=cfg.embedding_dim, hidden_dim=cfg.hidden_dim, output_dim=2*cfg.output_dim)
+
     model.to(device)
-    model.load_state_dict(torch.load(os.path.join(cfg.save_path, '{}_{}'.format(cfg.model_name, cfg.model_type))))
+    model.load_state_dict(torch.load(os.path.join(cfg.save_path, '{}_{}_T{}_S{}.pth'.format(cfg.model_name, cfg.model_type, cfg.n_timesteps, cfg.style))))
     model.eval()
 
-    arr = S.loadmat(os.path.join(cfg.data_path, cfg.test_experiment))
-    if cfg.exp == 'PFC':
-        arr = arr[dataset.strip('.mat').replace('LFP', 'lfp')][0][0][1]
-    elif cfg.exp == 'RSC':
-        arr = arr['lfp'][0][0][1]
-    arr = butter_lowpass_filter(arr.squeeze(), cfg.cutoff, cfg.fs, cfg.order)
-    arr = arr.astype(np.float32)
-
     # pick a random sample
-    start_idx = 100000
     time_window = cfg.n_timesteps 
     synthetic_trajectory_length = 5 * 600
-    
-    init_seq = torch.tensor(arr[start_idx : start_idx+time_window]).unsqueeze(0).to(device)
-    real_trajectory = arr[start_idx: start_idx+time_window+synthetic_trajectory_length]
-    rtrajectory = copy.deepcopy(real_trajectory)
 
-    fig = plt.figure()
-    ax = fig.add_subplot()
-    ax.plot(rtrajectory, c = 'b', alpha=0.75, label='original')
+    if cfg.style == 'raw':
+        '''
+        arr = S.loadmat(os.path.join(cfg.data_path, cfg.test_experiment))
+        if cfg.exp == 'PFC':
+            arr = arr[dataset.strip('.mat').replace('LFP', 'lfp')][0][0][1]
+        elif cfg.exp == 'RSC':
+            arr = arr['lfp'][0][0][1]
+        arr = butter_lowpass_filter(arr.squeeze(), cfg.cutoff, cfg.fs, cfg.order)
+        arr = arr.astype(np.float32)
 
-    for k in range(1):
-        syn_trajectory = gen_sequence(model, init_seq, synthetic_trajectory_length)
-        ax.plot(syn_trajectory, c = 'r', alpha=0.75)
+        start_idx = 100000
+        init_seq = torch.tensor(arr[start_idx : start_idx+time_window]).unsqueeze(0).to(device)
+        real_trajectory = arr[start_idx: start_idx+time_window+synthetic_trajectory_length]
+        rtrajectory = copy.deepcopy(real_trajectory)
+        '''
 
-    plt.legend()
-    plt.show()
+        start_idx = validation_set.rnd_idx[0]
+        init_seq = torch.tensor(validation_set.arrs[start_idx][:time_window]).unsqueeze(0).to(device)
+        real_trajectory = validation_set.arrs[start_idx][:time_window+synthetic_trajectory_length]
+        rtrajectory = copy.deepcopy(real_trajectory)
+        
+        fig = plt.figure()
+        ax = fig.add_subplot()
+        ax.plot(rtrajectory, c = 'b', alpha=0.75, label='original')
 
+        for k in range(1):
+            syn_trajectory = gen_sequence(model, init_seq, synthetic_trajectory_length)
+            ax.plot(syn_trajectory, c = 'r', alpha=0.75)
+
+        plt.legend()
+        plt.show()
+
+    elif cfg.style == 'pca':
+        start_idx = validation_set.rnd_idx[0]
+        init_seq = torch.tensor(validation_set.arrs[start_idx][:time_window, :]).unsqueeze(0).to(device)
+        real_trajectory = validation_set.arrs[start_idx][:time_window+synthetic_trajectory_length, :]
+        rtrajectory = copy.deepcopy(real_trajectory)
+
+        syn_trajectory = gen_sequence_pca(model, init_seq, synthetic_trajectory_length, cfg.output_dim)
+        
+        fig = plt.figure()
+        ax1 = fig.add_subplot(121,projection='3d')
+        ax2 = fig.add_subplot(122, projection='3d')
+
+        for i in range(10, synthetic_trajectory_length):
+            ax1.clear()
+            ax2.clear()
+
+            ax1.plot(rtrajectory[i-10:i+10,0], rtrajectory[i-10:i+10,1], rtrajectory[i-10:i+10,2])
+            ax1.set_xlim([-10, 10])
+            ax1.set_ylim([-10, 10])
+            ax1.set_zlim([-10, 10])
+            ax1.grid(False)
+
+            ax2.plot(syn_trajectory[i-10:i+10,0], syn_trajectory[i-10:i+10,1], syn_trajectory[i-10:i+10,2])
+            ax2.set_xlim([-10, 10])
+            ax2.set_ylim([-10, 10])
+            ax2.set_zlim([-10, 10])
+            ax2.grid(False)
+            
+            plt.pause(0.01)
+        plt.show()
 
 if __name__ == '__main__':
     # CUDA for PyTorch

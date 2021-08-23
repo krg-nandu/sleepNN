@@ -19,11 +19,19 @@ class Config():
         self.train_zscore = False
         self.model_name = 'rodentRSC'
         self.model_type = 'asleep' # choice is between asleep vs awake
+        # the kind of training data we provide to the models
+        self.style = ['raw', 'pca'][1] 
 
-        # params for the neural data preprocessing
+        # model related hyperparameters
+        self.embedding_dim = 3
+        self.hidden_dim = 128
+        self.output_dim = 3
+
+        # params for l data preprocessing
         self.order = 6
         self.fs = 600.
         self.cutoff = 6.
         self.window = 5 * self.fs
         self.min_bout_duration = 1. * self.fs
         self.merge_thresh = 2. * self.fs
+        self.pca_window = (1/6)*self.fs

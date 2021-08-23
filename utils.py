@@ -2,6 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import butter, lfilter, freqz
 from sklearn.mixture import GaussianMixture
+import scipy.io as S
+from sklearn.decomposition import PCA
+import os, pickle
 
 def identify_threshold(power):
     lq = np.quantile(power, 0.01)
@@ -104,3 +107,42 @@ def extract_sleep_bouts(arr, cfg, make_plot=False):
         plt.show()
 
     return y, bouts
+
+def make_pcs(cfg):
+
+    half_window = int(cfg.pca_window / 2)
+    all_pts = []
+    pca = PCA(n_components=3)
+
+    for dataset in cfg.experiments:
+        print(dataset)
+        arr = S.loadmat(os.path.join(cfg.data_path, dataset))
+        if cfg.exp == 'PFC':
+            arr = arr[dataset.strip('.mat').replace('LFP', 'lfp')][0][0][1]
+        elif cfg.exp == 'RSC':
+            arr = arr['lfp'][0][0][1]
+
+        # low pass filter the data
+        filter_arr = butter_lowpass_filter(arr.squeeze(), cfg.cutoff, cfg.fs, cfg.order)
+        filter_arr = filter_arr.astype(np.float32)
+        n_dp = filter_arr.shape[0]
+        
+        pts = np.vstack([filter_arr[j - half_window: j + half_window] for j in range(half_window, n_dp - half_window, 2)])
+
+        all_pts.append(pts)
+
+    my_pts = np.vstack(all_pts)
+    
+    # build the pca model
+    pca = pca.fit(my_pts)
+    print(pca.explained_variance_ratio_)
+    pickle.dump(pca, open('{}_components.p'.format(cfg.exp), 'wb'))
+
+    arr = []
+    for k in range(len(all_pts)):
+        myp = pca.fit_transform(all_pts[k])
+        arr.append(myp)
+
+    pickle.dump(arr, open('{}_transformed.p'.format(cfg.exp), 'wb'))
+
+    return pca, arr
