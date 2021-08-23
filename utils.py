@@ -25,7 +25,7 @@ def butter_lowpass(cutoff, fs, order=5):
 
 def butter_lowpass_filter(data, cutoff, fs, order=5):
     b, a = butter_lowpass(cutoff, fs, order=order)
-    a = 1
+    #a = 1
     y = lfilter(b, a, data)
     return y
 

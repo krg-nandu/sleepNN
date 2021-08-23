@@ -11,11 +11,10 @@ import argparse
 import copy
 
 import numpy as np
-from scipy.signal import butter, lfilter, freqz
 import matplotlib.pyplot as plt
 from config import Config
 
-from utils import extract_sleep_bouts
+from utils import extract_sleep_bouts, butter_lowpass_filter
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, cfg, base_path, exp_name):
@@ -70,17 +69,19 @@ class ARLSTM(torch.nn.Module):
    def __init__(self, embedding_dim, hidden_dim, output_dim):
       super(ARLSTM, self).__init__()
       self.hidden_dim = hidden_dim
+      self.output_dim = output_dim
 
       # The LSTM takes action labels as inputs, and outputs hidden states
       # with dimensionality hidden_dim.
       self.lstm = torch.nn.LSTM(input_size=embedding_dim, hidden_size=hidden_dim, num_layers=3)
       self.output_fn = torch.nn.Linear(hidden_dim, output_dim)
-      self.act = F.log_softmax
+      self.act = F.softplus
 
    def forward(self, x):
       lstm_out, _ = self.lstm(x.transpose(-1,0).unsqueeze(-1))
       pred = self.output_fn(lstm_out[-1])
       # is there a good activation function for this? not sure..
+      pred = torch.cat([pred[:, :int(self.output_dim/2)], self.act(pred[:, int(self.output_dim/2):])], axis=-1)
 
       return pred
 
@@ -101,7 +102,12 @@ def compute_logprob(k, a, b):
 '''Isotropic heteroskedastic loss
 '''
 def iso_het_loss(x, mu, var):
-    return torch.mean(((x - mu) ** 2)/(var ** 2) + 0.5 * torch.log((var ** 2)))
+    return torch.sum( ((x - mu) ** 2)/var + torch.log(var) )
+
+'''Cheat to try replicate a confidence interval
+'''
+def lsqr(x, mu, var):
+    return torch.sum( (x - (mu+var))**2 + (x - (mu-var))**2)
 
 def train_fn(device):
     cfg = Config()
@@ -112,10 +118,14 @@ def train_fn(device):
     # set up the model
     model = ARLSTM(embedding_dim=1, hidden_dim=128, output_dim=2)
     
-    loss_fn = iso_het_loss
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
-    #optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
-    #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+    #loss_fn = iso_het_loss
+    loss_fn = lsqr
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+    if False:
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
     model.to(device)
     model.train()
@@ -143,7 +153,7 @@ def train_fn(device):
        print('Epoch:{} | Batch: {}/{} | loss: {}'.format(epoch, cnt, training_generator.__len__(), per_epoch_loss[-1]))
 
     # saving model
-    torch.save(model.state_dict(), os.path.join(cfg.save_path, '{}_{}'.format(cfg.model_name, cfg.model_type)))
+    torch.save(model.state_dict(), os.path.join(cfg.save_path, '{}_{}.pth'.format(cfg.model_name, cfg.model_type)))
 
 
 def gen_sequence(model, seq, len_sample_traj):
@@ -151,12 +161,15 @@ def gen_sequence(model, seq, len_sample_traj):
     seq2 = seq.clone()
     pred_seq = list(seq.cpu().numpy().flatten())
 
+    mu, sd = [], []
     with torch.no_grad():
         for k in tqdm.tqdm(range(len_sample_traj)):
             pred = model(seq)
             
             # sample based on this distribution
             next_token = torch.normal(pred[:,0], pred[:,1])
+            sd.append(pred[:, 1])
+            mu.append(pred[:, 0])
             pred_seq.append(next_token)
             
             # update seq
@@ -166,83 +179,30 @@ def gen_sequence(model, seq, len_sample_traj):
 
     return pred_seq
 
-'''
-Sample a bunch of synthetic action trajectories from the autoreg LSTM
-'''
-def simulate_seq(model, val_set, filename, r_idx=0, len_sample_traj=500, n_repeats=100):
-    seq = val_set.preds[val_set.rnd_idx[r_idx], val_set.rnd_start[r_idx]:val_set.rnd_start[r_idx]+16]
-    #seq = torch.tensor([2, 2, 2, 5, 4, 4, 4, 4, 5, 3, 5, 5, 5, 2, 5, 2])
-    #seq = seq.unsqueeze(0).float().to(device)
-    seq = torch.tensor(seq).unsqueeze(0).float().to(device)
 
-    fig = plt.figure()
-    #ax = fig.add_subplot(111, projection='3d')
-    ax = fig.add_subplot(111)
-
-    sequences = np.zeros((n_repeats+1, len_sample_traj+16))    
-    sequences[0,:] = val_set.preds[val_set.rnd_idx[r_idx], val_set.rnd_start[r_idx]:val_set.rnd_start[r_idx]+16+len_sample_traj]
-
-
-    for k in range(n_repeats):
-        pred_seq = gen_sequence(model, seq, len_sample_traj)
-        pred_seq = torch.tensor(pred_seq).unsqueeze(-1).unsqueeze(-1).to(device)
-        zs, _ = model.lstm(pred_seq)
-    
-        sequences[k+1, :] = pred_seq.cpu().numpy().squeeze()
-
-        #traj = [x.cpu().data.numpy().squeeze() for x in zs]
-        #traj = np.vstack(traj)
-        #ax.plot(traj[:,0], traj[:,1], traj[:,2])
-
-    cmap = ax.imshow(sequences, interpolation='none', cmap='Set1')
-
-    divider = make_axes_locatable(ax)
-    cax = divider.append_axes("right", size="5%", pad=0.05)
-    cbar = plt.colorbar(cmap, cax=cax)
-
-    cbar.set_ticks(np.arange(9))
-    cbar.set_ticklabels(BEH_LABELS)
-    plt.setp(cbar.ax.get_yticklabels(), fontsize=8)
-
-    ax.set_xlabel('time')
-    ax.set_xticks([0, len_sample_traj])
-    ax.set_xticklabels(['0s', '%0.2fs'%(len_sample_traj/30)])
-    ax.set_yticks([0])
-    ax.set_yticklabels(['original'])
-    #ax.set_ylabel('simulated', fontsize=8)
-    #plt.axis('off')
-
-    # Turn spines off and create white grid.
-    for edge, spine in ax.spines.items():
-        spine.set_visible(False)
-
-    plt.savefig(os.path.join('simulated_seqs', filename))
-    plt.close()
-
-
-def generate(device, save_path):
+def generate(device):
     np.random.seed(0)
-    params = {'batch_size': 32,
-              'shuffle': False,
-              'num_workers': 1}
+    cfg = Config()
 
-    # this is a bad way, but doing this just to keep track of the params of the distribution
-    training_set = Dataset('data/', ['PFC_LFP_rat1.mat'])
- 
     model = ARLSTM(embedding_dim=1, hidden_dim=128, output_dim=2)
     model.to(device)
-    model.load_state_dict(torch.load(save_path))
+    model.load_state_dict(torch.load(os.path.join(cfg.save_path, '{}_{}'.format(cfg.model_name, cfg.model_type))))
     model.eval()
 
-    arr = S.loadmat('data/PFC_LFP_rat1.mat')
-    arr = (arr['PFC_lfp_rat1'][0][0][1][0].astype(np.float32) - training_set.mean)/training_set.std
+    arr = S.loadmat(os.path.join(cfg.data_path, cfg.test_experiment))
+    if cfg.exp == 'PFC':
+        arr = arr[dataset.strip('.mat').replace('LFP', 'lfp')][0][0][1]
+    elif cfg.exp == 'RSC':
+        arr = arr['lfp'][0][0][1]
+    arr = butter_lowpass_filter(arr.squeeze(), cfg.cutoff, cfg.fs, cfg.order)
+    arr = arr.astype(np.float32)
 
     # pick a random sample
-    start_idx = 1000
-    time_window = 32 
-
+    start_idx = 100000
+    time_window = cfg.n_timesteps 
+    synthetic_trajectory_length = 5 * 600
+    
     init_seq = torch.tensor(arr[start_idx : start_idx+time_window]).unsqueeze(0).to(device)
-    synthetic_trajectory_length = 2048
     real_trajectory = arr[start_idx: start_idx+time_window+synthetic_trajectory_length]
     rtrajectory = copy.deepcopy(real_trajectory)
 
@@ -273,6 +233,6 @@ if __name__ == '__main__':
     if args.train:
         train_fn(device)
     elif args.generate:
-        generate(device, 'ckpts/rodentV0.pth')
+        generate(device)
     else:
         raise NotImplementedError

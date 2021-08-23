@@ -4,16 +4,16 @@ class Config():
         self.exp = 'RSC' # [choice between RSC and PFC]
         self.data_path = 'data/'
         self.experiments = ['RSC_LFP_rat3_600Hz.mat', 'RSC_LFP_rat4_600Hz.mat','RSC_LFP_rat5_600Hz.mat']
-
+        self.test_experiment = 'RSC_LFP_rat3_600Hz.mat'
         self.save_path = 'ckpts/'
 
         # training related hyperparameters
         self.dataset_size = 1000000
-        self.n_timesteps = 128
+        self.n_timesteps = 32
         self.train_params = {
                 'batch_size': 1024,
                 'shuffle': False,
-                'num_workers': 1
+                'num_workers': 4
                 }
         self.max_epochs = 100
         self.train_zscore = False
