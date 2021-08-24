@@ -26,10 +26,11 @@ class DatasetPCA(torch.utils.data.Dataset):
         self.arrs = []
 
         if not os.path.exists('{}_components.p'.format(cfg.exp)):
-            self.pca, self.arrs = make_pcs(cfg)
+            self.pca, self.arrs, self.bouts = make_pcs(cfg)
         else:
             self.pca = pickle.load(open('{}_components.p'.format(cfg.exp), 'rb'))
             self.arrs = pickle.load(open('{}_transformed.p'.format(cfg.exp), 'rb'))
+            self.bouts = pickle.load(open('{}_bouts.p'.format(cfg.exp), 'rb'))
 
         self.n_datapoints = len(cfg.experiments) #len(self.arrs)
 
@@ -43,9 +44,15 @@ class DatasetPCA(torch.utils.data.Dataset):
     def __getitem__(self, index):
         'Generates one sample of data'
         idx = self.rnd_idx[index]
+
         # sample start index 
-        arr_len = self.arrs[idx].shape[0]
-        start_idx = np.random.randint(arr_len - self.cfg.n_timesteps - 1)    
+        arr_len = len(self.bouts[self.cfg.model_type][idx])
+        start_idx = np.random.randint(arr_len)
+        start_idx = int(self.bouts[self.cfg.model_type][idx][start_idx]/2)
+
+        # overall training
+        #arr_len = self.arrs[idx].shape[0]
+        #start_idx = np.random.randint(arr_len - self.cfg.n_timesteps - 1)    
 
         return self.arrs[idx][start_idx:start_idx + self.cfg.n_timesteps, :], self.arrs[idx][start_idx+self.cfg.n_timesteps, :]
 
@@ -109,7 +116,6 @@ class ARLSTM(torch.nn.Module):
       self.output_fn = torch.nn.Linear(hidden_dim, output_dim)
       self.act = F.softplus
 
-
    def init_hidden(self, batch_size):
       hidden = torch.zeros(self.n_layers, batch_size, self.hidden_dim).to('cuda:0')
       cell = torch.zeros(self.n_layers, batch_size, self.hidden_dim).to('cuda:0')
@@ -123,7 +129,7 @@ class ARLSTM(torch.nn.Module):
 
       if reset_hidden:
         self.init_hidden(inp.shape[1])
-        lstm_out, _ = self.lstm(inp, self.hidden_state)
+        lstm_out, self.hidden_state = self.lstm(inp, self.hidden_state)
       else:
         lstm_out, _ = self.lstm(inp)
 
@@ -136,7 +142,6 @@ class ARLSTM(torch.nn.Module):
       pred = torch.cat([pred[..., :nparams], self.act(pred[..., nparams:])], axis=-1)
 
       return pred
-
 
 def _log_beta(x, y):
     return torch.lgamma(x) + torch.lgamma(y) - torch.lgamma(x + y)
@@ -338,10 +343,10 @@ def generate(device):
         rtrajectory = copy.deepcopy(real_trajectory)
         syn_trajectory = gen_sequence_pca(model, init_seq, synthetic_trajectory_length, cfg.output_dim)
        
-        import ipdb; ipdb.set_trace()
         lfp = validation_set.pca.inverse_transform(rtrajectory)
         syn = validation_set.pca.inverse_transform(syn_trajectory)
-
+        plt.plot(lfp[:, -1]); plt.plot(syn[:, -1]); plt.show()
+        import ipdb; ipdb.set_trace()
         #inverse_transform(10, validation_set.pca, rtrajectory, syn_trajectory)
         
         fig = plt.figure()

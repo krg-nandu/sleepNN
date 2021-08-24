@@ -1,24 +1,27 @@
 class Config():
     def __init__(self):
         # experiment type
-        self.exp = 'RSC' # [choice between RSC and PFC]
+        self.exp = ['RSC', 'PFC'][0] 
         self.data_path = 'data/'
         self.experiments = ['RSC_LFP_rat3_500Hz.mat'] #, 'RSC_LFP_rat4_600Hz.mat','RSC_LFP_rat5_600Hz.mat']
         self.test_experiment = 'RSC_LFP_rat3_500Hz.mat'
+
         self.save_path = 'ckpts/'
 
         # training related hyperparameters
         self.dataset_size = 1000000
-        self.n_timesteps = 32
+        self.n_timesteps = 32 #256 #32
         self.train_params = {
                 'batch_size': 1024,
                 'shuffle': False,
                 'num_workers': 4
                 }
-        self.max_epochs = 100
+        self.max_epochs = 50
         self.train_zscore = False
         self.model_name = 'rodentRSC'
-        self.model_type = 'asleep' # choice is between asleep vs awake
+
+        # the mode of model training
+        self.model_type = ['awake', 'asleep'][1]
         
         # the kind of training data we provide to the models
         self.style = ['raw', 'pca'][1] 
@@ -28,7 +31,7 @@ class Config():
         self.hidden_dim = 128
         self.output_dim = 3
 
-        # params for l data preprocessing
+        # params for LFP data preprocessing
         self.order = 6
         self.fs = 600.
         self.cutoff = 6.

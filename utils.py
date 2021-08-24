@@ -32,7 +32,7 @@ def butter_lowpass_filter(data, cutoff, fs, order=5):
     y = lfilter(b, a, data)
     return y
 
-def extract_sleep_bouts(arr, cfg, make_plot=False):
+def extract_sleep_bouts(arr, cfg, make_plot=False, force_mode=None):
     # Filter the data, and plot both the original and filtered signals.
     y = butter_lowpass_filter(arr, cfg.cutoff, cfg.fs, cfg.order)
     power = np.convolve(y**2, np.ones(int(cfg.window), dtype=int),'valid')
@@ -65,9 +65,14 @@ def extract_sleep_bouts(arr, cfg, make_plot=False):
         plt.subplots_adjust(hspace=0.35)
         plt.show()
 
-    if cfg.model_type == 'asleep':
+    if not(force_mode == None):
+        mtype = force_mode
+    else:
+        mtype = cfg.model_type
+
+    if mtype == 'asleep':
         idx = np.where(power >= thr)[0]
-    elif cfg.model_type == 'awake':
+    elif mtype == 'awake':
         idx = np.where(power <= thr)[0]
     else:
         raise NotImplementedError
@@ -113,6 +118,7 @@ def make_pcs(cfg):
     half_window = int(cfg.pca_window / 2)
     all_pts = []
     pca = PCA(n_components=3)
+    all_bouts = {'asleep': [], 'awake': []}
 
     for dataset in cfg.experiments:
         print(dataset)
@@ -131,12 +137,22 @@ def make_pcs(cfg):
 
         all_pts.append(pts)
 
+        _, sleep_bouts = extract_sleep_bouts(arr.squeeze(), cfg, force_mode='asleep')
+        sbouts = [y - half_window for x in sleep_bouts for y in range(x[0], x[1]) if y - half_window >= 0]
+        all_bouts['asleep'].append(sbouts)
+
+        _, wake_bouts = extract_sleep_bouts(arr.squeeze(), cfg, force_mode='awake')
+        wbouts = [y - half_window for x in wake_bouts for y in range(x[0], x[1]) if y - half_window >= 0]
+        all_bouts['awake'].append(wbouts)
+
     my_pts = np.vstack(all_pts)
     
     # build the pca model
     pca = pca.fit(my_pts)
     print(pca.explained_variance_ratio_)
     pickle.dump(pca, open('{}_components.p'.format(cfg.exp), 'wb'))
+
+    pickle.dump(all_bouts, open('{}_bouts.p'.format(cfg.exp),'wb'))
 
     arr = []
     for k in range(len(all_pts)):
@@ -145,4 +161,4 @@ def make_pcs(cfg):
 
     pickle.dump(arr, open('{}_transformed.p'.format(cfg.exp), 'wb'))
 
-    return pca, arr
+    return pca, arr, all_bouts
