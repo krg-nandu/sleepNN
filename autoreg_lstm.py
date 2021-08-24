@@ -31,32 +31,10 @@ class DatasetPCA(torch.utils.data.Dataset):
             self.pca = pickle.load(open('{}_components.p'.format(cfg.exp), 'rb'))
             self.arrs = pickle.load(open('{}_transformed.p'.format(cfg.exp), 'rb'))
 
-        '''
-        half_window = int(cfg.pca_window/2)
-
-        for dataset in exp_name:
-            arr = S.loadmat(os.path.join(base_path, dataset))
-            if cfg.exp == 'PFC':
-                arr = arr[dataset.strip('.mat').replace('LFP', 'lfp')][0][0][1]
-            elif cfg.exp == 'RSC':
-                arr = arr['lfp'][0][0][1]
-
-            # low pass filter
-            filter_arr = butter_lowpass_filter(arr.squeeze(), cfg.cutoff, cfg.fs, cfg.order)
-            filter_arr = filter_arr.astype(np.float32)
-            n_dp = filter_arr.shape[0]    
-            pts = np.vstack([filter_arr[j - half_window: j + half_window] for j in range(half_window, n_dp - half_window, 2)])
-
-            # extract PCs
-            myp = pca.fit_transform(pts)
-            self.arrs.append(myp)
-        '''
-
-        self.n_datapoints = len(self.arrs)
+        self.n_datapoints = len(cfg.experiments) #len(self.arrs)
 
         print('Preparing train-test splits...')
         self.rnd_idx = np.random.randint(self.n_datapoints, size=(self.dataset_size,)) 
-        #, np.random.randint(self.n_duration-self.n_timesteps-1, size=(self.dataset_size,))
  
     def __len__(self):
         'Denotes the total number of samples'
@@ -125,25 +103,37 @@ class ARLSTM(torch.nn.Module):
       super(ARLSTM, self).__init__()
       self.hidden_dim = hidden_dim
       self.output_dim = output_dim
+      self.n_layers = 3
 
-      # The LSTM takes action labels as inputs, and outputs hidden states
-      # with dimensionality hidden_dim.
-      self.lstm = torch.nn.LSTM(input_size=embedding_dim, hidden_size=hidden_dim, num_layers=3)
+      self.lstm = torch.nn.LSTM(input_size=embedding_dim, hidden_size=hidden_dim, num_layers=self.n_layers)
       self.output_fn = torch.nn.Linear(hidden_dim, output_dim)
       self.act = F.softplus
 
-   def forward(self, x):
 
+   def init_hidden(self, batch_size):
+      hidden = torch.zeros(self.n_layers, batch_size, self.hidden_dim).to('cuda:0')
+      cell = torch.zeros(self.n_layers, batch_size, self.hidden_dim).to('cuda:0')
+      self.hidden_state = (hidden, cell)
+
+   def forward(self, x, only_last=False, reset_hidden=False):
       if len(x.shape) == 3:
         inp = x.transpose(1, 0)
       else:
         inp = x.transpose(-1,0).unsqueeze(-1)
 
-      lstm_out, _ = self.lstm(inp)
-      pred = self.output_fn(lstm_out[-1])
+      if reset_hidden:
+        self.init_hidden(inp.shape[1])
+        lstm_out, _ = self.lstm(inp, self.hidden_state)
+      else:
+        lstm_out, _ = self.lstm(inp)
 
-      # is there a good activation function for this? not sure..
-      pred = torch.cat([pred[:, :int(self.output_dim/2)], self.act(pred[:, int(self.output_dim/2):])], axis=-1)
+      nparams = int(self.output_dim/2)
+      if only_last:
+        pred = self.output_fn(lstm_out[-1])
+      else:      
+        pred = self.output_fn(lstm_out)
+
+      pred = torch.cat([pred[..., :nparams], self.act(pred[..., nparams:])], axis=-1)
 
       return pred
 
@@ -206,10 +196,21 @@ def train_fn(device):
           batch, lab = batch.to(device), lab.to(device)
           model.zero_grad()
           y = model(batch)
+          
+          xs = batch.clone().transpose(1,0)
+          xs[:-1, :, :] = xs[1:, :, :]
+          xs[-1, :, :] = lab
+          mu, var = y[..., :cfg.output_dim], y[..., cfg.output_dim:]
+
+          ''' DEPRECATED (or flag this)
+          # Only last time step supervision
 
           # y has the "parameters" of the distribution that we want to model
-          mu, var = y[:, :cfg.output_dim], y[:, cfg.output_dim:]
-          loss = loss_fn(lab, mu, var)
+          #mu, var = y[:, :cfg.output_dim], y[:, cfg.output_dim:]
+          #loss = loss_fn(lab, mu, var)
+          '''
+
+          loss = loss_fn(xs, mu, var)
 
           loss.backward()
           optimizer.step()
@@ -255,7 +256,7 @@ def gen_sequence_pca(model, seq, len_sample_traj, nparam):
 
     with torch.no_grad():
         for k in tqdm.tqdm(range(len_sample_traj)):
-            pred = model(seq)
+            pred = model(seq, only_last=True, reset_hidden=True)
             
             # sample based on this distribution
             next_token = torch.normal(pred[0, :nparam], pred[0, nparam:])
@@ -268,10 +269,21 @@ def gen_sequence_pca(model, seq, len_sample_traj, nparam):
 
     return np.vstack(pred_seq)
 
+def inverse_transform(idx, pca, rtrajectory, syn_trajectory):
+    rval = pca.inverse_transform(rtrajectory[idx])
+    sval = pca.inverse_transform(syn_trajectory[idx])
+    plt.figure()
+    plt.plot(rval, c='r', label='recorded')
+    plt.plot(sval, c='k', label='simulated')
+    plt.legend()
+    plt.grid()
+    plt.show()
+
 def generate(device):
     np.random.seed(0)
     cfg = Config()
-
+    #import ipdb; ipdb.set_trace()
+    
     if cfg.style == 'raw':
         validation_set = Dataset(cfg, cfg.data_path, [cfg.test_experiment])
     elif cfg.style == 'pca':
@@ -324,8 +336,13 @@ def generate(device):
         init_seq = torch.tensor(validation_set.arrs[start_idx][:time_window, :]).unsqueeze(0).to(device)
         real_trajectory = validation_set.arrs[start_idx][:time_window+synthetic_trajectory_length, :]
         rtrajectory = copy.deepcopy(real_trajectory)
-
         syn_trajectory = gen_sequence_pca(model, init_seq, synthetic_trajectory_length, cfg.output_dim)
+       
+        import ipdb; ipdb.set_trace()
+        lfp = validation_set.pca.inverse_transform(rtrajectory)
+        syn = validation_set.pca.inverse_transform(syn_trajectory)
+
+        #inverse_transform(10, validation_set.pca, rtrajectory, syn_trajectory)
         
         fig = plt.figure()
         ax1 = fig.add_subplot(121,projection='3d')
@@ -339,15 +356,15 @@ def generate(device):
             ax1.set_xlim([-10, 10])
             ax1.set_ylim([-10, 10])
             ax1.set_zlim([-10, 10])
-            ax1.grid(False)
+            ax1.grid()
 
             ax2.plot(syn_trajectory[i-10:i+10,0], syn_trajectory[i-10:i+10,1], syn_trajectory[i-10:i+10,2])
             ax2.set_xlim([-10, 10])
             ax2.set_ylim([-10, 10])
             ax2.set_zlim([-10, 10])
-            ax2.grid(False)
-            
+            ax2.grid()
             plt.pause(0.01)
+
         plt.show()
 
 if __name__ == '__main__':

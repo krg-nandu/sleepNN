@@ -3,8 +3,8 @@ class Config():
         # experiment type
         self.exp = 'RSC' # [choice between RSC and PFC]
         self.data_path = 'data/'
-        self.experiments = ['RSC_LFP_rat3_600Hz.mat', 'RSC_LFP_rat4_600Hz.mat','RSC_LFP_rat5_600Hz.mat']
-        self.test_experiment = 'RSC_LFP_rat3_600Hz.mat'
+        self.experiments = ['RSC_LFP_rat3_500Hz.mat'] #, 'RSC_LFP_rat4_600Hz.mat','RSC_LFP_rat5_600Hz.mat']
+        self.test_experiment = 'RSC_LFP_rat3_500Hz.mat'
         self.save_path = 'ckpts/'
 
         # training related hyperparameters
@@ -19,6 +19,7 @@ class Config():
         self.train_zscore = False
         self.model_name = 'rodentRSC'
         self.model_type = 'asleep' # choice is between asleep vs awake
+        
         # the kind of training data we provide to the models
         self.style = ['raw', 'pca'][1] 
 
