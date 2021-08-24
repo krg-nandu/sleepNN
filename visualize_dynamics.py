@@ -33,10 +33,7 @@ ax.grid(False)
 ax.set_xlabel('PC1')
 ax.set_ylabel('PC2')
 ax.set_zlabel('PC3')
-ax.set_xticks(
-              [-400, 400], 
-              ['-400', '400'])
-
+ax.set_xticks([-400, 400], ['-400', '400'])
 
 def update(i):
     ax.clear()

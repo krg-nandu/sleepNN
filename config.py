@@ -10,15 +10,16 @@ class Config():
 
         # training related hyperparameters
         self.dataset_size = 1000000
-        self.n_timesteps = 32 #256 #32
+        self.n_timesteps = 256 #32
         self.train_params = {
                 'batch_size': 1024,
                 'shuffle': False,
                 'num_workers': 4
                 }
-        self.max_epochs = 50
+        self.max_epochs = 100
         self.train_zscore = False
         self.model_name = 'rodentRSC'
+        self.per_timestep_supervision = True
 
         # the mode of model training
         self.model_type = ['awake', 'asleep'][1]

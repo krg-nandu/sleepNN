@@ -189,6 +189,8 @@ def train_fn(device):
         optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
+    # just for the large model
+    model.load_state_dict(torch.load(os.path.join(cfg.save_path, '{}_{}_T{}_S{}.pth'.format(cfg.model_name, cfg.model_type, cfg.n_timesteps, cfg.style))))
     model.to(device)
     model.train()
 
@@ -201,21 +203,16 @@ def train_fn(device):
           batch, lab = batch.to(device), lab.to(device)
           model.zero_grad()
           y = model(batch)
-          
-          xs = batch.clone().transpose(1,0)
-          xs[:-1, :, :] = xs[1:, :, :]
-          xs[-1, :, :] = lab
-          mu, var = y[..., :cfg.output_dim], y[..., cfg.output_dim:]
 
-          ''' DEPRECATED (or flag this)
-          # Only last time step supervision
-
-          # y has the "parameters" of the distribution that we want to model
-          #mu, var = y[:, :cfg.output_dim], y[:, cfg.output_dim:]
-          #loss = loss_fn(lab, mu, var)
-          '''
-
-          loss = loss_fn(xs, mu, var)
+          if cfg.per_timestep_supervision:          
+            xs = batch.clone().transpose(1,0)
+            xs[:-1, :, :] = xs[1:, :, :]
+            xs[-1, :, :] = lab
+            mu, var = y[..., :cfg.output_dim], y[..., cfg.output_dim:]
+            loss = loss_fn(xs, mu, var)
+          else:
+            mu, var = y[-1, :, :cfg.output_dim], y[-1, :, cfg.output_dim:]
+            loss = loss_fn(lab, mu, var)
 
           loss.backward()
           optimizer.step()
@@ -337,17 +334,29 @@ def generate(device):
         plt.show()
 
     elif cfg.style == 'pca':
+        '''
+        idx = 0
+        arr_len = len(validation_set.bouts[validation_set.cfg.model_type][idx])
+        start_idx = 5000 #np.random.randint(arr_len)
+        start_idx = int(validation_set.bouts[cfg.model_type][idx][start_idx]/2)
+        init_seq = torch.tensor(validation_set.arrs[idx][start_idx: start_idx+time_window, :]).unsqueeze(0).to(device)
+        real_trajectory = validation_set.arrs[idx][start_idx:start_idx+time_window+synthetic_trajectory_length, :]
+        '''
         start_idx = validation_set.rnd_idx[0]
         init_seq = torch.tensor(validation_set.arrs[start_idx][:time_window, :]).unsqueeze(0).to(device)
         real_trajectory = validation_set.arrs[start_idx][:time_window+synthetic_trajectory_length, :]
+
         rtrajectory = copy.deepcopy(real_trajectory)
         syn_trajectory = gen_sequence_pca(model, init_seq, synthetic_trajectory_length, cfg.output_dim)
        
         lfp = validation_set.pca.inverse_transform(rtrajectory)
         syn = validation_set.pca.inverse_transform(syn_trajectory)
+        #pickle.dump({'lfp': lfp, 'syn':syn}, open('data/syn_sleep/{}_T{}_I{}.p'.format(cfg.exp, cfg.n_timesteps, start_idx), 'wb'))
         plt.plot(lfp[:, -1]); plt.plot(syn[:, -1]); plt.show()
+        
+        #pickle.dump({'lfp': rtrajectory, 'syn':syn_trajectory}, open('data/syn_sleep/awake_trajectory.p', 'wb'))
+
         import ipdb; ipdb.set_trace()
-        #inverse_transform(10, validation_set.pca, rtrajectory, syn_trajectory)
         
         fig = plt.figure()
         ax1 = fig.add_subplot(121,projection='3d')

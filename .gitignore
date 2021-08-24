@@ -1,3 +1,5 @@
 *.mat
 *.swp
 *.swo
+*.p
+*__pycache__*
