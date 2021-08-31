@@ -168,6 +168,7 @@ def lsqr(x, mu, var):
     return torch.sum( (x - mu)**2)
 
 def train_fn(device):
+    np.random.seed(0)
     cfg = Config()
 
     if cfg.style == 'raw':
@@ -190,7 +191,7 @@ def train_fn(device):
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
     # just for the large model
-    model.load_state_dict(torch.load(os.path.join(cfg.save_path, '{}_{}_T{}_S{}.pth'.format(cfg.model_name, cfg.model_type, cfg.n_timesteps, cfg.style))))
+    #model.load_state_dict(torch.load(os.path.join(cfg.save_path, '{}_{}_T{}_S{}.pth'.format(cfg.model_name, cfg.model_type, cfg.n_timesteps, cfg.style))))
     model.to(device)
     model.train()
 
@@ -223,7 +224,7 @@ def train_fn(device):
        print('Epoch:{} | Batch: {}/{} | loss: {}'.format(epoch, cnt, training_generator.__len__(), per_epoch_loss[-1]))
 
     # saving model
-    torch.save(model.state_dict(), os.path.join(cfg.save_path, '{}_{}_T{}_S{}.pth'.format(cfg.model_name, cfg.model_type, cfg.n_timesteps, cfg.style)))
+    torch.save(model.state_dict(), os.path.join(cfg.save_path, 'rodent{}_{}_T{}_S{}.pth'.format(cfg.exp, cfg.model_type, cfg.n_timesteps, cfg.style)))
 
 
 def gen_sequence(model, seq, len_sample_traj):
@@ -284,7 +285,6 @@ def inverse_transform(idx, pca, rtrajectory, syn_trajectory):
 def generate(device):
     np.random.seed(0)
     cfg = Config()
-    #import ipdb; ipdb.set_trace()
     
     if cfg.style == 'raw':
         validation_set = Dataset(cfg, cfg.data_path, [cfg.test_experiment])
@@ -294,7 +294,7 @@ def generate(device):
     model = ARLSTM(embedding_dim=cfg.embedding_dim, hidden_dim=cfg.hidden_dim, output_dim=2*cfg.output_dim)
 
     model.to(device)
-    model.load_state_dict(torch.load(os.path.join(cfg.save_path, '{}_{}_T{}_S{}.pth'.format(cfg.model_name, cfg.model_type, cfg.n_timesteps, cfg.style))))
+    model.load_state_dict(torch.load(os.path.join(cfg.save_path, 'rodent{}_{}_T{}_S{}.pth'.format(cfg.exp, cfg.model_type, cfg.n_timesteps, cfg.style))))
     model.eval()
 
     # pick a random sample
@@ -334,18 +334,19 @@ def generate(device):
         plt.show()
 
     elif cfg.style == 'pca':
-        '''
+        '''        
         idx = 0
         arr_len = len(validation_set.bouts[validation_set.cfg.model_type][idx])
         start_idx = 5000 #np.random.randint(arr_len)
         start_idx = int(validation_set.bouts[cfg.model_type][idx][start_idx]/2)
         init_seq = torch.tensor(validation_set.arrs[idx][start_idx: start_idx+time_window, :]).unsqueeze(0).to(device)
         real_trajectory = validation_set.arrs[idx][start_idx:start_idx+time_window+synthetic_trajectory_length, :]
+        
         '''
         start_idx = validation_set.rnd_idx[0]
         init_seq = torch.tensor(validation_set.arrs[start_idx][:time_window, :]).unsqueeze(0).to(device)
         real_trajectory = validation_set.arrs[start_idx][:time_window+synthetic_trajectory_length, :]
-
+        
         rtrajectory = copy.deepcopy(real_trajectory)
         syn_trajectory = gen_sequence_pca(model, init_seq, synthetic_trajectory_length, cfg.output_dim)
        

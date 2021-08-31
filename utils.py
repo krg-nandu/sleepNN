@@ -32,7 +32,7 @@ def butter_lowpass_filter(data, cutoff, fs, order=5):
     y = lfilter(b, a, data)
     return y
 
-def extract_sleep_bouts(arr, cfg, make_plot=False, force_mode=None):
+def extract_sleep_bouts(arr, cfg, make_plot=True, force_mode=None):
     # Filter the data, and plot both the original and filtered signals.
     y = butter_lowpass_filter(arr, cfg.cutoff, cfg.fs, cfg.order)
     power = np.convolve(y**2, np.ones(int(cfg.window), dtype=int),'valid')
@@ -124,7 +124,7 @@ def make_pcs(cfg):
         print(dataset)
         arr = S.loadmat(os.path.join(cfg.data_path, dataset))
         if cfg.exp == 'PFC':
-            arr = arr[dataset.strip('.mat').replace('LFP', 'lfp')][0][0][1]
+            arr = arr[dataset.strip('.mat').replace('LFP', 'lfp')][0][0][1] * 1e-3
         elif cfg.exp == 'RSC':
             arr = arr['lfp'][0][0][1]
 

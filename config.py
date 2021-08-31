@@ -2,20 +2,25 @@ class Config():
     def __init__(self):
         # experiment type
         self.exp = ['RSC', 'PFC'][0] 
+        
         self.data_path = 'data/'
         self.experiments = ['RSC_LFP_rat3_500Hz.mat'] #, 'RSC_LFP_rat4_600Hz.mat','RSC_LFP_rat5_600Hz.mat']
         self.test_experiment = 'RSC_LFP_rat3_500Hz.mat'
+
+        #self.experiments = ['PFC_LFP_rat1.mat'] #, 'PFC_LFP_rat2.mat']
+        #self.test_experiment = ['PFC_LFP_rat1.mat']
 
         self.save_path = 'ckpts/'
 
         # training related hyperparameters
         self.dataset_size = 1000000
-        self.n_timesteps = 256 #32
+        self.n_timesteps = 32 #256 #32
         self.train_params = {
                 'batch_size': 1024,
                 'shuffle': False,
                 'num_workers': 4
                 }
+        
         self.max_epochs = 100
         self.train_zscore = False
         self.model_name = 'rodentRSC'
