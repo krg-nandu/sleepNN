@@ -3,3 +3,6 @@
 *.swo
 *.p
 *__pycache__*
+data/*
+figures/*
+ckpts/*
